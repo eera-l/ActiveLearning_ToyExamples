@@ -9,12 +9,13 @@ warnings.filterwarnings("ignore")
 
 
 class Sampler(object):
-    def __init__(self, classifier='SVM', cluster_type='moons',
-                 sample_size=1000, train_size=30, centers=None,
-                 clusters_std=None, noise=0.0, first_samples_size=15, plot=False, random_state=12):
+    def __init__(self, classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
+                 sample_size=1000, train_size=30, first_samples_size=15, centers=None,
+                 clusters_std=None, noise=0.0, plot=False, random_state=12):
         assert first_samples_size < train_size
         self.classifier = classifier
         self.cluster_type = cluster_type
+        self.informativeness_measure = informativeness_measure
         self.sample_size = sample_size
         self.train_size = train_size
         self.centers = centers
@@ -29,6 +30,11 @@ class Sampler(object):
         Generates data in clusters of optional shape and distribution
         :return: Array of data points and corresponding cluster label
         """
+        if self.cluster_type == 'moons' or self.cluster_type == 'circles':
+            if self.informativeness_measure != 'least_confidence':
+                print('Circles and moons can only be implemented with binary classification.' +
+                      '\nInformativeness measure has been changed to least confidence.')
+                self.informativeness_measure = 'least_confidence'
         if self.cluster_type == 'blobs':
             X, y = make_blobs(n_samples=self.sample_size,
                               centers=self.centers, cluster_std=self.clusters_std,
@@ -88,22 +94,32 @@ class Sampler(object):
                                      y_train[:self.first_samples_size])
         # Predict probabilities on test data
         preds = clf.predict_proba(x_test)
-        # Make array of probabilities and corresponding samples and labels
-        preds = np.hstack((preds, x_test, y_test.reshape(-1, 1)))
-        # Sort by difference in predicted probabilities for the two classes
-        preds = np.array(sorted(preds, key=lambda x: np.abs(x[1] - x[0])))
-        # Pick the most informative samples together with the samples the classifier has
-        # already been trained on. This is because sklearn SVC does not support
-        # partial training
-        x_train = np.vstack((preds[:self.train_size - self.first_samples_size][:, 2:4],
-                             x_train[:self.first_samples_size]))
-        y_train = np.hstack((preds[:self.train_size - self.first_samples_size][:, 4].flatten(),
-                             y_train[:self.first_samples_size]))
-        x_test = np.vstack((preds[self.train_size - self.first_samples_size:][:, 2:4],
-                            x_train[self.first_samples_size:]))
-        y_test = np.hstack((preds[self.train_size - self.first_samples_size:][:, 4].flatten(),
-                            y_train[self.first_samples_size:]))
-        # Retrain the classifier on these new samples
+        clf, score = self.__rank_samples__(clf, preds, x_train, y_train, x_test, y_test)
+        return clf, score
+
+    def __rank_samples__(self, clf, preds, x_train, y_train, x_test, y_test):
+        if self.informativeness_measure == 'least_confidence':
+            pass
+        elif self.informativeness_measure == 'margin':
+            # Make array of probabilities and corresponding samples and labels
+            preds = np.hstack((preds, x_test, y_test.reshape(-1, 1)))
+            # Sort by difference in predicted probabilities for the first two classes
+            # Needs to be fixed: it should be the two most probable classes, not the
+            # first two classes
+            preds = np.array(sorted(preds, key=lambda x: np.abs(x[1] - x[0])))
+            # Pick the most informative samples together with the samples the classifier has
+            # already been trained on. For cumulative training
+            start_index = x_train.shape[1]
+            end_index = start_index * 2
+            x_train = np.vstack((preds[:self.train_size - self.first_samples_size][:, start_index:end_index],
+                                 x_train[:self.first_samples_size]))
+            y_train = np.hstack((preds[:self.train_size - self.first_samples_size][:, end_index].flatten(),
+                                 y_train[:self.first_samples_size]))
+            x_test = np.vstack((preds[self.train_size - self.first_samples_size:][:, start_index:end_index],
+                                x_train[self.first_samples_size:]))
+            y_test = np.hstack((preds[self.train_size - self.first_samples_size:][:, end_index].flatten(),
+                                y_train[self.first_samples_size:]))
+            # Retrain the classifier on these new samples
         clf = self.__fit_classifier__(x_train, y_train)
         score = clf.score(x_test, y_test)
         return clf, score

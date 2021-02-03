@@ -38,7 +38,7 @@ class Sampler(object):
         if self.cluster_type == 'blobs':
             X, y = make_blobs(n_samples=self.sample_size,
                               centers=self.centers, cluster_std=self.clusters_std,
-                              n_features=len(self.clusters_std), random_state=self.random_state)
+                              n_features=2, random_state=self.random_state)
         elif self.cluster_type == 'moons':
             X, y = make_moons(n_samples=self.sample_size, noise=self.noise,
                               random_state=self.random_state)
@@ -94,32 +94,35 @@ class Sampler(object):
                                      y_train[:self.first_samples_size])
         # Predict probabilities on test data
         preds = clf.predict_proba(x_test)
-        clf, score = self.__rank_samples__(clf, preds, x_train, y_train, x_test, y_test)
+        clf, score = self.__rank_samples__(preds, x_train, y_train, x_test, y_test)
         return clf, score
 
-    def __rank_samples__(self, clf, preds, x_train, y_train, x_test, y_test):
+    def __rank_samples__(self, preds, x_train, y_train, x_test, y_test):
+        num_classes = preds.shape[1]
+        end_index = num_classes + 2
+        # Make array of probabilities and corresponding samples and labels
+        preds = np.hstack((preds, x_test, y_test.reshape(-1, 1)))
         if self.informativeness_measure == 'least_confidence':
-            pass
+            # x^star = argmax 1 - P_theta(y_hat | x)
+            preds = np.array(sorted(preds, key=lambda x: 1 - max(x[:num_classes]), reverse=True))
         elif self.informativeness_measure == 'margin':
-            # Make array of probabilities and corresponding samples and labels
-            preds = np.hstack((preds, x_test, y_test.reshape(-1, 1)))
-            # Sort by difference in predicted probabilities for the first two classes
-            # Needs to be fixed: it should be the two most probable classes, not the
-            # first two classes
-            preds = np.array(sorted(preds, key=lambda x: np.abs(x[1] - x[0])))
-            # Pick the most informative samples together with the samples the classifier has
-            # already been trained on. For cumulative training
-            start_index = x_train.shape[1]
-            end_index = start_index * 2
-            x_train = np.vstack((preds[:self.train_size - self.first_samples_size][:, start_index:end_index],
-                                 x_train[:self.first_samples_size]))
-            y_train = np.hstack((preds[:self.train_size - self.first_samples_size][:, end_index].flatten(),
-                                 y_train[:self.first_samples_size]))
-            x_test = np.vstack((preds[self.train_size - self.first_samples_size:][:, start_index:end_index],
-                                x_train[self.first_samples_size:]))
-            y_test = np.hstack((preds[self.train_size - self.first_samples_size:][:, end_index].flatten(),
-                                y_train[self.first_samples_size:]))
-            # Retrain the classifier on these new samples
+            # x^star = argmin P_theta(y1_hat | x) - P_theta(y2_hat | x)
+            preds = np.array(sorted(preds, key=lambda x: max(x[:num_classes]) - sorted(x[:num_classes], reverse=True)[1]))
+        elif self.informativeness_measure == 'entropy':
+            # x^star = argmax - sum(P_theta(y_i | x) * log P_theta(y_i | x))
+            preds = np.array(sorted(preds, key=lambda x: -np.sum([x[i] * np.log2(x[i]) for i in range(num_classes)]),
+                                    reverse=True))
+        # Pick the most informative samples together with the samples the classifier has
+        # already been trained on. For cumulative training
+        x_train = np.vstack((preds[:self.train_size - self.first_samples_size][:, num_classes:end_index],
+                             x_train[:self.first_samples_size]))
+        y_train = np.hstack((preds[:self.train_size - self.first_samples_size][:, end_index].flatten(),
+                             y_train[:self.first_samples_size]))
+        x_test = np.vstack((preds[self.train_size - self.first_samples_size:][:, num_classes:end_index],
+                            x_train[self.first_samples_size:]))
+        y_test = np.hstack((preds[self.train_size - self.first_samples_size:][:, end_index].flatten(),
+                            y_train[self.first_samples_size:]))
+        # Retrain the classifier on these new samples
         clf = self.__fit_classifier__(x_train, y_train)
         score = clf.score(x_test, y_test)
         return clf, score
@@ -161,16 +164,14 @@ class Sampler(object):
         if self.plot:
             X0, X1 = X[:, 0], X[:, 1]
             xx, yy = self.__make_meshgrid__(X0, X1)
-            fig = plt.figure(figsize=(10, 5))
+            fig = plt.figure(figsize=(7, 3))
             ax0 = fig.add_subplot(121)
             self.__plot_contours__(ax0, rs_clf, xx, yy, cmap=plt.cm.winter, alpha=0.5)
-            ax0.scatter(X[y == 0, 0], X[y == 0, 1])
-            ax0.scatter(X[y == 1, 0], X[y == 1, 1])
+            ax0.scatter(X[:, 0], X[:, 1], c=y)
             ax0.set_title(f'Random Sampling\nAccuracy: {rs_score * 100:.1f}%')
             ax1 = fig.add_subplot(122)
             self.__plot_contours__(ax1, us_clf, xx, yy, cmap=plt.cm.winter, alpha=0.5)
-            ax1.scatter(X[y == 0, 0], X[y == 0, 1])
-            ax1.scatter(X[y == 1, 0], X[y == 1, 1])
+            ax1.scatter(X[:, 0], X[:, 1], c=y)
             ax1.set_title(f'Uncertainty Sampling\nAccuracy: {us_score * 100:.1f}%')
             plt.show()
         return rs_score, us_score
@@ -180,9 +181,9 @@ if __name__ == '__main__':
     counter = 0
     n_attempts = 100
     for i in range(n_attempts):
-        sampler = Sampler(classifier='LR', cluster_type='blobs', random_state=i, train_size=20,
-                          clusters_std=[1.4, 1],
-                          centers=([-2, 0], [0, 2]), first_samples_size=10)
+        sampler = Sampler(classifier='LR', cluster_type='blobs', informativeness_measure='margin', random_state=i,
+                          train_size=20, clusters_std=[1.4, 1, 1.2], centers=([-2, 0], [0, 2], [2, 4]),
+                          first_samples_size=10)
         rs_score, us_score = sampler()
         if us_score > rs_score:
             counter += 1
@@ -190,7 +191,8 @@ if __name__ == '__main__':
           f'{counter / n_attempts * 100:.2f}%')
     counter = 0
     for i in range(n_attempts):
-        sampler = Sampler(classifier='SVM', cluster_type='moons', random_state=i, train_size=30,
+        sampler = Sampler(classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
+                          random_state=i, train_size=30,
                           noise=.15, first_samples_size=15)
         rs_score, us_score = sampler()
         if us_score > rs_score:
@@ -199,7 +201,8 @@ if __name__ == '__main__':
           f'{counter / n_attempts * 100:.2f}%')
     counter = 0
     for i in range(n_attempts):
-        sampler = Sampler(classifier='SVM', cluster_type='circles', random_state=i, train_size=30,
+        sampler = Sampler(classifier='SVM', cluster_type='circles', informativeness_measure='least_confidence',
+                          random_state=i, train_size=30,
                           first_samples_size=15)
         rs_score, us_score = sampler()
         if us_score > rs_score:

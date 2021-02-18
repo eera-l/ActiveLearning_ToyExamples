@@ -181,27 +181,35 @@ class Sampler(object):
         return rs_score, us_score
 
 
-def plot_learning_curve(sample_size, train_size_ratio, first_samples_ratio, n_attempts):
+def plot_learning_curve(sample_size, train_size_ratio, first_samples_ratio=2, n_attempts=100):
     """
     For the specified number of iterations, trains the classifier on n samples
     as n = (i * samplesize) / train_size_ratio. If train_size_ratio and n_attempts are set to 100,
     the classifier will be trained on 1% to 99% of the data, with an increase of 1% each time.
     If train_size_ratio is set to 1000 and n_attempts is set to 100, the classifier will be trained on
-    0.1% to
+    0.1% to 9.9% of the data, and so on.
+    :param sample_size: total number of samples to generate
+    :param train_size_ratio: magnitude of the fraction of data to use for training. E.g. 100 = start from 1%,
+    1000 = start from 0.1%
+    :param first_samples_ratio: ratio of the training samples to be used for the initial training of the classifier.
+    :param n_attempts: number of steps to train the classifier on. At each step the classifier is reinitialized
+    and retrained in an increasing fraction of data.
     """
     al_scores = []
     r_scores = []
     for i in range(1, n_attempts):
+        train_size = int(i * sample_size / train_size_ratio)
         sampler = Sampler(classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
-                          random_state=i, train_size=int(i * sample_size / train_size_ratio),
-                          noise=.15, first_samples_size=int((i * sample_size / train_size_ratio) / first_samples_ratio),
+                          random_state=i, train_size=train_size,
+                          noise=.15, first_samples_size=int(train_size / first_samples_ratio),
                           sample_size=sample_size)
         rs_score, us_score = sampler()
         al_scores.append(us_score * 100)
         r_scores.append(rs_score * 100)
     fig = plt.figure(figsize=(7, 5))
     ax = fig.add_subplot(111)
-    x = np.linspace(0.1, 10, num=99)
+    x = np.linspace(sample_size / (train_size_ratio * 100), sample_size / train_size_ratio * (n_attempts / 100),
+                    num=n_attempts - 1)
     ax.plot(x, al_scores, label='Active learning')
     ax.plot(x, r_scores, label='Random sampling')
     ax.set_xlabel('Fraction of data for training')
@@ -242,4 +250,4 @@ if __name__ == '__main__':
             counter += 1
     print(f'Percentage of times uncertainty sampling performed better than random, SVM with circles: '
           f'{counter / n_attempts * 100:.2f}%')
-    plot_learning_curve(sample_size=10000, train_size_ratio=1000, first_samples_ratio=2, n_attempts=100)
+    plot_learning_curve(sample_size=10000, train_size_ratio=1000, first_samples_ratio=2, n_attempts=1000)

@@ -6,4 +6,4 @@ Comparison of several active learning methods and classifiers on toy datasets, c
 
 Example: 
 
-<!--![alt text](http://url/to/img.png)-->
+![Example](https://github.com/eera-l/UncertaintySampling_ToyExample/blob/master/example_blobs.png)

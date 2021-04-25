@@ -12,7 +12,7 @@ class Sampler(object):
     def __init__(self, classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
                  sample_size=1000, train_size=30, first_samples_size=15, centers=None,
                  clusters_std=None, noise=0.0, plot=False, random_state=12):
-        assert first_samples_size < train_size
+        assert first_samples_size <= train_size
         self.classifier = classifier
         self.cluster_type = cluster_type
         self.informativeness_measure = informativeness_measure
@@ -54,8 +54,12 @@ class Sampler(object):
         samples and labels for test set
         """
         test_size = X.shape[0] - self.train_size
-        x_train, x_test, y_train, y_test = train_test_split(X, y, random_state=self.random_state,
-                                                            test_size=test_size)
+        try:
+            x_train, x_test, y_train, y_test = train_test_split(X, y, random_state=self.random_state,
+                                                                test_size=test_size)
+        except ValueError:
+            print(test_size)
+            print(X.shape[0])
         return x_train, x_test, y_train, y_test
 
     def __fit_classifier__(self, x_train, y_train):
@@ -177,6 +181,43 @@ class Sampler(object):
         return rs_score, us_score
 
 
+def plot_learning_curve(sample_size, train_size_ratio, first_samples_ratio=2, n_attempts=100):
+    """
+    For the specified number of iterations, trains the classifier on n samples
+    as n = (i * samplesize) / train_size_ratio. If train_size_ratio and n_attempts are set to 100,
+    the classifier will be trained on 1% to 99% of the data, with an increase of 1% each time.
+    If train_size_ratio is set to 1000 and n_attempts is set to 100, the classifier will be trained on
+    0.1% to 9.9% of the data, and so on.
+    :param sample_size: total number of samples to generate
+    :param train_size_ratio: magnitude of the fraction of data to use for training. E.g. 100 = start from 1%,
+    1000 = start from 0.1%
+    :param first_samples_ratio: ratio of the training samples to be used for the initial training of the classifier.
+    :param n_attempts: number of steps to train the classifier on. At each step the classifier is reinitialized
+    and retrained in an increasing fraction of data.
+    """
+    al_scores = []
+    r_scores = []
+    for i in range(1, n_attempts):
+        train_size = int(i * sample_size / train_size_ratio)
+        sampler = Sampler(classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
+                          random_state=i, train_size=train_size,
+                          noise=.15, first_samples_size=int(train_size / first_samples_ratio),
+                          sample_size=sample_size)
+        rs_score, us_score = sampler()
+        al_scores.append(us_score * 100)
+        r_scores.append(rs_score * 100)
+    fig = plt.figure(figsize=(7, 5))
+    ax = fig.add_subplot(111)
+    x = np.linspace(sample_size / (train_size_ratio * 100), sample_size / train_size_ratio * (n_attempts / 100),
+                    num=n_attempts - 1)
+    ax.plot(x, al_scores, label='Active learning')
+    ax.plot(x, r_scores, label='Random sampling')
+    ax.set_xlabel('Fraction of data for training')
+    ax.set_ylabel('Test accuracy')
+    ax.legend()
+    plt.show()
+
+
 if __name__ == '__main__':
     counter = 0
     n_attempts = 100
@@ -190,10 +231,10 @@ if __name__ == '__main__':
     print(f'Percentage of times uncertainty sampling performed better than random, LR: '
           f'{counter / n_attempts * 100:.2f}%')
     counter = 0
-    for i in range(n_attempts):
+    for i in range(1, n_attempts):
         sampler = Sampler(classifier='SVM', cluster_type='moons', informativeness_measure='least_confidence',
-                          random_state=i, train_size=30,
-                          noise=.15, first_samples_size=15)
+                          random_state=i, train_size=int(i * 10000 / 1000),
+                          noise=.15, first_samples_size=int((i * 10000 / 1000) / 2))
         rs_score, us_score = sampler()
         if us_score > rs_score:
             counter += 1
@@ -209,4 +250,4 @@ if __name__ == '__main__':
             counter += 1
     print(f'Percentage of times uncertainty sampling performed better than random, SVM with circles: '
           f'{counter / n_attempts * 100:.2f}%')
-
+    plot_learning_curve(sample_size=10000, train_size_ratio=1000, first_samples_ratio=2, n_attempts=1000)
